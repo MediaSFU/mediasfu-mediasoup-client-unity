@@ -1,0 +1,8 @@
+# Treat native plugin binaries as binary (no text diffs)
+*.dylib binary
+*.so    binary
+*.a     binary
+
+# xcframework internal binaries (no extension)
+Runtime/Plugins/iOS/WebRTC.xcframework/**/WebRTC binary
+Runtime/Plugins/iOS/MediaSFUNativeBridge.xcframework/**/*.a binary

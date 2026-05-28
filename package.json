@@ -1,0 +1,30 @@
+{
+  "name": "com.mediasfu.mediasoup-client-unity",
+  "displayName": "MediaSFU Mediasoup Client Unity",
+  "version": "0.1.0-preview.1",
+  "unity": "2022.3",
+  "description": "Unity mediasoup WebRTC client bridge with native plugin bindings for MediaSFU Unity, custom SFU apps, real-time audio, video, and screen sharing.",
+  "keywords": [
+    "mediasfu",
+    "mediasoup",
+    "mediasoup-client",
+    "webrtc",
+    "unity",
+    "unity-webrtc",
+    "native-plugin",
+    "video-conferencing",
+    "live-streaming",
+    "windows",
+    "macos",
+    "android",
+    "ios"
+  ],
+  "author": {
+    "name": "MediaSFU",
+    "url": "https://www.mediasfu.com/"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.2"
+  }
+}

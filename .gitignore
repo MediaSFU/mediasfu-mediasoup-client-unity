@@ -1,0 +1,27 @@
+.DS_Store
+Library/
+Temp/
+Obj/
+Build/
+Builds/
+Logs/
+UserSettings/
+.vs/
+.idea/
+*.csproj
+*.sln
+*.user
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+# Debug symbols - too large for GitHub, not needed in packages
+**/dSYMs/
+
+# Linux native bridge is added by projects that build it locally until the
+# packaged Linux backend is built and validated.
+Runtime/Plugins/Linux/x86_64/libMediaSFUNativeBridge.so
+Runtime/Plugins/Linux/x86_64/libMediaSFUNativeBridge.so.meta
