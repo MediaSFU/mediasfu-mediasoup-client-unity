@@ -75,12 +75,13 @@ namespace MediaSFU.Unity
         public string ConsumerStatsJson { get; set; } = string.Empty;
     }
 
-    public sealed class MediaSfuNativePluginWebRtcEngine : IMediaSfuWebRtcEngine
+    public sealed class MediaSfuNativePluginWebRtcEngine : IMediaSfuWebRtcEngine, IMediaSfuIceRelayTransportControl
     {
         private readonly IntPtr _engineHandle;
         private readonly JsonSerializerOptions _jsonOptions;
         private MediaSfuNativePluginBackendInfo _cachedBackendInfo;
         private bool _disposed;
+        private volatile bool _iceRelayOperationsUnavailable;
 
         public static MediaSfuOperationResult<IMediaSfuWebRtcDevice> TryCreateWebRtcDevice(
             MediaSfuNativePluginWebRtcEngineOptions options = null)
@@ -235,7 +236,8 @@ namespace MediaSFU.Unity
                 NativePluginOperationNames.InitializeSendTransport,
                 new NativePluginSendTransportPayload
                 {
-                    Transport = transport ?? throw new ArgumentNullException(nameof(transport))
+                    Transport = transport ?? throw new ArgumentNullException(nameof(transport)),
+                    IceServersJson = RelayIceServersAtCreation(transport)
                 });
 
             return Task.CompletedTask;
@@ -466,7 +468,8 @@ namespace MediaSFU.Unity
                 new NativePluginReceiveTransportPayload
                 {
                     RemoteProducer = remoteProducer,
-                    Transport = transport ?? throw new ArgumentNullException(nameof(transport))
+                    Transport = transport ?? throw new ArgumentNullException(nameof(transport)),
+                    IceServersJson = RelayIceServersAtCreation(transport)
                 });
 
             return Task.CompletedTask;
@@ -677,6 +680,106 @@ namespace MediaSFU.Unity
             }
         }
 
+        public Task<MediaSfuTransportIceState> GetTransportIceStateAsync(
+            MediaSfuTransportDirection direction,
+            string transportId,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_disposed || _iceRelayOperationsUnavailable)
+            {
+                return Task.FromResult<MediaSfuTransportIceState>(null);
+            }
+
+            var response = InvokeOperationResponse<NativePluginTransportIceStateResponse>(
+                NativePluginOperationNames.GetTransportIceState,
+                new NativePluginTransportIcePayload
+                {
+                    Direction = ToNativeDirection(direction),
+                    TransportId = transportId ?? string.Empty
+                });
+            if (!response.Success || response.Result == null)
+            {
+                // Bridges built before turn-relay-v1 do not know these operations: keep the previous behaviour.
+                if (IsUnsupportedOperation(response.Error))
+                {
+                    _iceRelayOperationsUnavailable = true;
+                }
+
+                return Task.FromResult<MediaSfuTransportIceState>(null);
+            }
+
+            return Task.FromResult(
+                new MediaSfuTransportIceState
+                {
+                    ConnectionState = response.Result.ConnectionState ?? string.Empty,
+                    CandidateType = response.Result.CandidateType ?? string.Empty,
+                    Protocol = response.Result.Protocol ?? string.Empty,
+                    RelayProtocol = response.Result.RelayProtocol ?? string.Empty
+                });
+        }
+
+        public Task UpdateIceServersAsync(
+            MediaSfuTransportDirection direction,
+            string transportId,
+            string iceServersJson,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnsureNotDisposed();
+
+            InvokeVoidOperation(
+                NativePluginOperationNames.UpdateIceServers,
+                new NativePluginTransportIcePayload
+                {
+                    Direction = ToNativeDirection(direction),
+                    TransportId = transportId ?? string.Empty,
+                    IceServersJson = iceServersJson ?? string.Empty
+                });
+
+            return Task.CompletedTask;
+        }
+
+        public Task RestartIceAsync(
+            MediaSfuTransportDirection direction,
+            string transportId,
+            string iceParametersJson,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnsureNotDisposed();
+
+            InvokeVoidOperation(
+                NativePluginOperationNames.RestartIce,
+                new NativePluginTransportIcePayload
+                {
+                    Direction = ToNativeDirection(direction),
+                    TransportId = transportId ?? string.Empty,
+                    IceParametersJson = iceParametersJson ?? string.Empty
+                });
+
+            return Task.CompletedTask;
+        }
+
+        private static string RelayIceServersAtCreation(MediaSfuWebRtcTransport transport)
+        {
+            // Only the server's 'always' mode creates the transport with the relay; 'fallback' starts direct.
+            return transport?.IceRelayOffer?.CreatesTransportWithRelay == true
+                ? transport.IceRelayOffer.IceServersJson
+                : string.Empty;
+        }
+
+        private static string ToNativeDirection(MediaSfuTransportDirection direction)
+        {
+            return direction == MediaSfuTransportDirection.Receive ? "recv" : "send";
+        }
+
+        private static bool IsUnsupportedOperation(string errorCode)
+        {
+            return string.Equals(errorCode, "native_bridge_unknown_operation", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(errorCode, "native_bridge_unimplemented_operation", StringComparison.OrdinalIgnoreCase);
+        }
+
         public void Dispose()
         {
             if (_disposed)
@@ -714,6 +817,22 @@ namespace MediaSFU.Unity
         }
 
         private TResponse InvokeOperation<TResponse>(string operationName, object payload)
+            where TResponse : class
+        {
+            var parsedResponse = InvokeOperationResponse<TResponse>(operationName, payload);
+            if (!parsedResponse.Success)
+            {
+                var detail = string.IsNullOrWhiteSpace(parsedResponse.Detail)
+                    ? parsedResponse.Error
+                    : parsedResponse.Detail;
+                throw new InvalidOperationException(
+                    $"MediaSFU native plugin operation '{operationName}' failed: {detail}");
+            }
+
+            return parsedResponse.Result;
+        }
+
+        private NativePluginResponse<TResponse> InvokeOperationResponse<TResponse>(string operationName, object payload)
             where TResponse : class
         {
             string payloadJson;
@@ -789,16 +908,7 @@ namespace MediaSFU.Unity
                     $"MediaSFU native plugin operation '{operationName}' returned an unreadable response.");
             }
 
-            if (!parsedResponse.Success)
-            {
-                var detail = string.IsNullOrWhiteSpace(parsedResponse.Detail)
-                    ? parsedResponse.Error
-                    : parsedResponse.Detail;
-                throw new InvalidOperationException(
-                    $"MediaSFU native plugin operation '{operationName}' failed: {detail}");
-            }
-
-            return parsedResponse.Result;
+            return parsedResponse;
         }
 
         private static string ReadUtf8String(IntPtr pointer)
@@ -1062,6 +1172,9 @@ namespace MediaSFU.Unity
             public const string BindConsumer = "bindConsumer";
             public const string GetRemoteVideoFrameMetadata = "getRemoteVideoFrameMetadata";
             public const string CloseConsumer = "closeConsumer";
+            public const string GetTransportIceState = "getTransportIceState";
+            public const string UpdateIceServers = "updateIceServers";
+            public const string RestartIce = "restartIce";
         }
 
         private static class NativePluginInterop
@@ -1179,6 +1292,28 @@ namespace MediaSFU.Unity
             public bool AllowMockBackend { get; set; }
         }
 
+        private sealed class NativePluginTransportIcePayload
+        {
+            public string Direction { get; set; } = string.Empty;
+
+            public string TransportId { get; set; } = string.Empty;
+
+            public string IceServersJson { get; set; } = string.Empty;
+
+            public string IceParametersJson { get; set; } = string.Empty;
+        }
+
+        private sealed class NativePluginTransportIceStateResponse
+        {
+            public string ConnectionState { get; set; } = string.Empty;
+
+            public string CandidateType { get; set; } = string.Empty;
+
+            public string Protocol { get; set; } = string.Empty;
+
+            public string RelayProtocol { get; set; } = string.Empty;
+        }
+
         private sealed class NativePluginEmptyPayload
         {
         }
@@ -1186,6 +1321,8 @@ namespace MediaSFU.Unity
         private sealed class NativePluginSendTransportPayload
         {
             public MediaSfuWebRtcTransport Transport { get; set; }
+
+            public string IceServersJson { get; set; } = string.Empty;
         }
 
         private sealed class NativePluginLoadDeviceRtpCapabilitiesPayload
@@ -1205,6 +1342,8 @@ namespace MediaSFU.Unity
             public MediaSfuRemoteProducerEvent RemoteProducer { get; set; }
 
             public MediaSfuWebRtcTransport Transport { get; set; }
+
+            public string IceServersJson { get; set; } = string.Empty;
         }
 
         private sealed class NativePluginCompleteReceiveTransportConnectPayload : NativePluginCompleteTransportConnectPayload

@@ -196,6 +196,7 @@ namespace MediaSFU.Unity
             }
 
             await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            MediaSfuIceRelayFallback receiveRelayFallback = null;
             try
             {
                 var roomRtpCapabilitiesJson = request.RoomValidation?.RtpCapabilitiesJson;
@@ -241,6 +242,13 @@ namespace MediaSFU.Unity
                         cancellationToken)
                     .ConfigureAwait(false);
 
+                // turn-relay-v1: relay restart if ICE stays stuck. This SDK has no other ICE recovery to run beside it.
+                receiveRelayFallback = MediaSfuIceRelayFallback.Attach(
+                    _adapter,
+                    createTransportResult.Value,
+                    MediaSfuTransportDirection.Receive,
+                    () => !_disposed);
+
                 var consumeResult = await request.ConsumeTrackAsync(
                         new MediaSfuConsumeRequest
                         {
@@ -271,6 +279,9 @@ namespace MediaSFU.Unity
                     return MediaSfuOperationResult<bool>.FromFailure(
                         "ConnectReceiveTransport failed: adapter returned no DTLS parameters JSON.");
                 }
+
+                // The transport's connect step: ICE starts now even if no connecting state shows yet.
+                receiveRelayFallback?.NotifyTransportConnect();
 
                 MediaSfuOperationResult<bool> connectResult;
                 try
@@ -355,8 +366,10 @@ namespace MediaSFU.Unity
                 {
                     TransportId = createTransportResult.Value.Id,
                     ConsumerId = consumeResult.Value.ConsumerId,
-                    ServerConsumerId = serverConsumerId
+                    ServerConsumerId = serverConsumerId,
+                    RelayFallback = receiveRelayFallback
                 };
+                receiveRelayFallback = null;
 
                 return MediaSfuOperationResult<bool>.FromSuccess(true);
             }
@@ -368,6 +381,8 @@ namespace MediaSFU.Unity
             }
             finally
             {
+                // A transport that never became a consumer is not watched any longer.
+                receiveRelayFallback?.Dispose();
                 _operationLock.Release();
             }
         }
@@ -387,10 +402,13 @@ namespace MediaSFU.Unity
             await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                if (!_runtimeByProducerId.Remove(remoteProducerClosed.RemoteProducerId))
+                if (!_runtimeByProducerId.TryGetValue(remoteProducerClosed.RemoteProducerId, out var closedRuntime))
                 {
                     return MediaSfuOperationResult<bool>.FromSuccess(true);
                 }
+
+                _runtimeByProducerId.Remove(remoteProducerClosed.RemoteProducerId);
+                closedRuntime.RelayFallback?.Dispose();
 
                 try
                 {
@@ -427,6 +445,11 @@ namespace MediaSFU.Unity
             }
 
             _disposed = true;
+            foreach (var runtime in _runtimeByProducerId.Values)
+            {
+                runtime.RelayFallback?.Dispose();
+            }
+
             _adapter.Dispose();
             _operationLock.Dispose();
             _runtimeByProducerId.Clear();
@@ -579,6 +602,8 @@ namespace MediaSFU.Unity
             public string ConsumerId { get; set; } = string.Empty;
 
             public string ServerConsumerId { get; set; } = string.Empty;
+
+            public MediaSfuIceRelayFallback RelayFallback { get; set; }
         }
     }
 }

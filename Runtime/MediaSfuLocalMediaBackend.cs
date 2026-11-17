@@ -39,6 +39,17 @@ namespace MediaSFU.Unity
         public string SctpParametersJson { get; set; } = string.Empty;
 
         public string RawPayload { get; set; } = string.Empty;
+
+        /// <summary>
+        /// TURN relay offer the server sent beside the transport params (turn-relay-v1). Kept out of the transport
+        /// payload on purpose: engines add the relay at creation only when the server's mode is <c>always</c>.
+        /// </summary>
+        [Newtonsoft.Json.JsonIgnore]
+        public MediaSfuIceRelayOffer IceRelayOffer { get; set; }
+
+        /// <summary>The media socket this transport was created on, used by the relay fallback.</summary>
+        [Newtonsoft.Json.JsonIgnore]
+        public MediaSfuIceRelaySignalling IceRelaySignalling { get; set; }
     }
 
     public sealed class MediaSfuTransportConnectRequest

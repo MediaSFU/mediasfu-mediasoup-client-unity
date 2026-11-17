@@ -254,7 +254,7 @@ namespace MediaSFU.Unity
         }
     }
 
-    public sealed class MediaSfuWebRtcEngineLocalMediaAdapter : IMediaSfuTransportBackedLocalMediaAdapter
+    public sealed class MediaSfuWebRtcEngineLocalMediaAdapter : IMediaSfuTransportBackedLocalMediaAdapter, IMediaSfuIceRelayTransportControl
     {
         private readonly IMediaSfuWebRtcEngine _engine;
         private readonly bool _ownsEngine;
@@ -363,6 +363,38 @@ namespace MediaSFU.Unity
             }
         }
 
+        public Task<MediaSfuTransportIceState> GetTransportIceStateAsync(
+            MediaSfuTransportDirection direction,
+            string transportId,
+            CancellationToken cancellationToken = default)
+        {
+            return _disposed || !(_engine is IMediaSfuIceRelayTransportControl control)
+                ? Task.FromResult<MediaSfuTransportIceState>(null)
+                : control.GetTransportIceStateAsync(direction, transportId, cancellationToken);
+        }
+
+        public Task UpdateIceServersAsync(
+            MediaSfuTransportDirection direction,
+            string transportId,
+            string iceServersJson,
+            CancellationToken cancellationToken = default)
+        {
+            EnsureNotDisposed();
+            return MediaSfuIceRelayEngineSupport.RequireControl(_engine)
+                .UpdateIceServersAsync(direction, transportId, iceServersJson, cancellationToken);
+        }
+
+        public Task RestartIceAsync(
+            MediaSfuTransportDirection direction,
+            string transportId,
+            string iceParametersJson,
+            CancellationToken cancellationToken = default)
+        {
+            EnsureNotDisposed();
+            return MediaSfuIceRelayEngineSupport.RequireControl(_engine)
+                .RestartIceAsync(direction, transportId, iceParametersJson, cancellationToken);
+        }
+
         private void EnsureNotDisposed()
         {
             if (_disposed)
@@ -372,7 +404,7 @@ namespace MediaSFU.Unity
         }
     }
 
-    public sealed class MediaSfuWebRtcEngineRemoteMediaAdapter : IMediaSfuTransportBackedRemoteMediaAdapter
+    public sealed class MediaSfuWebRtcEngineRemoteMediaAdapter : IMediaSfuTransportBackedRemoteMediaAdapter, IMediaSfuIceRelayTransportControl
     {
         private readonly IMediaSfuWebRtcEngine _engine;
         private readonly bool _ownsEngine;
@@ -459,12 +491,53 @@ namespace MediaSFU.Unity
             }
         }
 
+        public Task<MediaSfuTransportIceState> GetTransportIceStateAsync(
+            MediaSfuTransportDirection direction,
+            string transportId,
+            CancellationToken cancellationToken = default)
+        {
+            return _disposed || !(_engine is IMediaSfuIceRelayTransportControl control)
+                ? Task.FromResult<MediaSfuTransportIceState>(null)
+                : control.GetTransportIceStateAsync(direction, transportId, cancellationToken);
+        }
+
+        public Task UpdateIceServersAsync(
+            MediaSfuTransportDirection direction,
+            string transportId,
+            string iceServersJson,
+            CancellationToken cancellationToken = default)
+        {
+            EnsureNotDisposed();
+            return MediaSfuIceRelayEngineSupport.RequireControl(_engine)
+                .UpdateIceServersAsync(direction, transportId, iceServersJson, cancellationToken);
+        }
+
+        public Task RestartIceAsync(
+            MediaSfuTransportDirection direction,
+            string transportId,
+            string iceParametersJson,
+            CancellationToken cancellationToken = default)
+        {
+            EnsureNotDisposed();
+            return MediaSfuIceRelayEngineSupport.RequireControl(_engine)
+                .RestartIceAsync(direction, transportId, iceParametersJson, cancellationToken);
+        }
+
         private void EnsureNotDisposed()
         {
             if (_disposed)
             {
                 throw new ObjectDisposedException(nameof(MediaSfuWebRtcEngineRemoteMediaAdapter));
             }
+        }
+    }
+
+    internal static class MediaSfuIceRelayEngineSupport
+    {
+        public static IMediaSfuIceRelayTransportControl RequireControl(IMediaSfuWebRtcEngine engine)
+        {
+            return engine as IMediaSfuIceRelayTransportControl ??
+                   throw new NotSupportedException("This MediaSFU WebRTC engine cannot restart ICE with a relay.");
         }
     }
 

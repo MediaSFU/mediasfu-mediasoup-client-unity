@@ -16,6 +16,7 @@ namespace MediaSFU.Unity
         private string _sendTransportId = string.Empty;
         private bool _sendTransportConnected;
         private bool _disposed;
+        private MediaSfuIceRelayFallback _sendRelayFallback;
 
         public MediaSfuTransportBackedLocalMediaBackend(IMediaSfuTransportBackedLocalMediaAdapter adapter)
         {
@@ -69,6 +70,8 @@ namespace MediaSFU.Unity
             }
 
             _disposed = true;
+            _sendRelayFallback?.Dispose();
+            _sendRelayFallback = null;
             _adapter.Dispose();
             _operationLock.Dispose();
         }
@@ -270,6 +273,15 @@ namespace MediaSFU.Unity
                 await _adapter.InitializeSendTransportAsync(createResult.Value, cancellationToken).ConfigureAwait(false);
                 _sendTransportId = createResult.Value.Id;
                 _sendTransportConnected = false;
+
+                // turn-relay-v1: relay restart if ICE stays stuck. This SDK has no other ICE recovery to run beside it.
+                var sendTransportId = _sendTransportId;
+                _sendRelayFallback?.Dispose();
+                _sendRelayFallback = MediaSfuIceRelayFallback.Attach(
+                    _adapter,
+                    createResult.Value,
+                    MediaSfuTransportDirection.Send,
+                    () => !_disposed && string.Equals(_sendTransportId, sendTransportId, StringComparison.Ordinal));
                 Console.WriteLine($"MediaSfu local media send transport initialized id={_sendTransportId}");
             }
 
@@ -298,6 +310,9 @@ namespace MediaSFU.Unity
                 return MediaSfuOperationResult<bool>.FromFailure(
                     "ConnectSendTransport failed: adapter returned no DTLS parameters JSON.");
             }
+
+            // The transport's connect step: ICE starts now even if no connecting state shows yet.
+            _sendRelayFallback?.NotifyTransportConnect();
 
             MediaSfuOperationResult<bool> connectResult;
             try
